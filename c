@@ -1,216 +1,103 @@
-#!/bin/bash
-# XTunnel PC — uso: bash xtunnel-test.sh
-
-INSTALL_DIR="/opt/xtunnel"
-CONFIG_FILE="$INSTALL_DIR/config.conf"
-CLIENT_PY="$INSTALL_DIR/btclient.py"
-XRAY_BIN="/usr/local/bin/xray"
-SOCKS_PORT=10808
-TUNNEL_PORT=10809
-VLESS_UUID="a3482e88-686a-4a58-8126-99c9df64b7bf"
-REDSOCKS_CONF="$INSTALL_DIR/redsocks.conf"
-
-# Primera vez — instalar todo
-if [ ! -f "$CONFIG_FILE" ]; then
-    echo "Instalando dependencias..."
-    apt-get install -y -q redsocks python3 iptables iproute2 curl
-
-    echo "Instalando xray..."
-    curl -fsSLk https://github.com/XTLS/Xray-install/raw/main/install-release.sh -o /tmp/xi.sh
-    bash /tmp/xi.sh install
-
-    mkdir -p "$INSTALL_DIR"
-
-    CLIENT_ID=$(python3 -c "import random,string; print(''.join(random.choices(string.ascii_lowercase+string.digits,k=8)))")
-    echo "CLIENT_ID=\"$CLIENT_ID\"" > "$CONFIG_FILE"
-
-    cat > "$CLIENT_PY" << 'PYEOF'
 #!/usr/bin/env python3
-import asyncio, struct, time, sys
-from pathlib import Path
+# Test de conexion minimo — muestra cada paso
+import socket, time, sys
 
+CLIENT_ID  = "sz67pu5p"
 PROXY_HOST = "emailmarketing.personal.com.ar"
 PROXY_IPV6 = "2606:4700::6812:16b7"
 PROXY_PORT = 80
 TUNNEL_HOST = "1.brawlpass.com.ar"
-XRAY_HOST = "127.0.0.1"
-XRAY_PORT = 10809
-TYPE_OPEN = 0x01; TYPE_DATA = 0x02; TYPE_CLOSE = 0x03
 
-def load_id():
-    for l in Path("/opt/xtunnel/config.conf").read_text().splitlines():
-        if l.startswith("CLIENT_ID="):
-            return l.split("=",1)[1].strip().strip('"')
+print("=== XTunnel test de conexion ===")
+print(f"ID: {CLIENT_ID}")
+print()
 
-async def connect(cid):
-    import socket as s
-    addrs = []
-    try: addrs += [(a[4], s.AF_INET6) for a in s.getaddrinfo(PROXY_IPV6, PROXY_PORT, s.AF_INET6, s.SOCK_STREAM)]
-    except: pass
-    try: addrs += [(a[4], a[0]) for a in s.getaddrinfo(PROXY_HOST, PROXY_PORT, s.AF_UNSPEC, s.SOCK_STREAM)]
-    except: pass
-    for addr, fam in addrs:
-        try:
-            sk = s.socket(fam, s.SOCK_STREAM)
-            sk.settimeout(10); sk.connect(addr); sk.settimeout(None)
-            sk.setsockopt(s.IPPROTO_TCP, s.TCP_NODELAY, 1)
-            sk.sendall(f"GET / HTTP/1.1\r\nHost: {PROXY_HOST}\r\n\r\n".encode())
-            await asyncio.sleep(0.01)
-            t0 = time.time()
-            sk.sendall((f"- / HTTP/1.1\r\nHost: {TUNNEL_HOST}\r\nUpgrade: websocket\r\n"
-                f"Action: tunnel\r\nX-Client-Id: {cid}\r\n\r\n").encode())
-            sk.settimeout(8); raw = b""
-            while b"\r\n\r\n" not in raw:
-                c = sk.recv(4096)
-                if not c: break
-                raw += c
-            sk.settimeout(None)
-            if b"101" not in raw[:20]:
-                r = raw.decode(errors="replace")
-                if "EXPIRED" in r: print("ID expirado"); return None, True
-                if "UNKNOWN" in r: print("ID no registrado"); return None, True
-                sk.close(); continue
-            print(f"Conectado {int((time.time()-t0)*1000)}ms", flush=True)
-            return await asyncio.open_connection(sock=sk), False
-        except:
-            try: sk.close()
-            except: pass
-    return None, False
+# Paso 1 - resolver DNS
+print("[1] Resolviendo DNS...")
+addrs = []
+try:
+    r = socket.getaddrinfo(PROXY_IPV6, PROXY_PORT, socket.AF_INET6, socket.SOCK_STREAM)
+    addrs.append((r[0][4], socket.AF_INET6))
+    print(f"    IPv6 ok: {PROXY_IPV6}")
+except Exception as e:
+    print(f"    IPv6 fallo: {e}")
 
-async def mux(rd, wr):
-    streams = {}; lock = asyncio.Lock(); buf = bytearray()
-    async def snd(t, sid, d=b""):
-        async with lock:
-            wr.write(struct.pack("!B I I", t, sid, len(d)) + d)
-            await wr.drain()
-    async def pipe(sid, xr):
-        try:
-            while True:
-                d = await xr.read(65536)
-                if not d: break
-                await snd(TYPE_DATA, sid, d)
-        except: pass
-        await snd(TYPE_CLOSE, sid); streams.pop(sid, None)
-    async def rn(n):
-        nonlocal buf
-        while len(buf) < n:
-            c = await rd.read(65536)
-            if not c: raise ConnectionError()
-            buf.extend(c)
-        d, buf[:] = bytes(buf[:n]), buf[n:]; return d
-    async def ka():
-        while True:
-            await asyncio.sleep(45)
-            try: await snd(TYPE_DATA, 0)
-            except: break
-    asyncio.get_event_loop().create_task(ka())
+try:
+    r = socket.getaddrinfo(PROXY_HOST, PROXY_PORT, socket.AF_UNSPEC, socket.SOCK_STREAM)
+    for info in r:
+        addrs.append((info[4], info[0]))
+        print(f"    IPv4 ok: {info[4][0]}")
+except Exception as e:
+    print(f"    IPv4 fallo: {e}")
+
+if not addrs:
+    print("ERROR: Sin direcciones. Verificar internet.")
+    sys.exit(1)
+
+# Paso 2 - conectar socket
+print()
+print("[2] Conectando socket...")
+sock = None
+for addr, fam in addrs:
     try:
-        while True:
-            t, sid, l = struct.unpack("!B I I", await rn(9))
-            data = await rn(l) if l else b""
-            if t == TYPE_OPEN:
-                try:
-                    xr, xw = await asyncio.open_connection(XRAY_HOST, XRAY_PORT)
-                    streams[sid] = (xr, xw)
-                    asyncio.get_event_loop().create_task(pipe(sid, xr))
-                except: await snd(TYPE_CLOSE, sid)
-            elif t == TYPE_DATA:
-                p = streams.get(sid)
-                if p:
-                    try: p[1].write(data); await p[1].drain()
-                    except: await snd(TYPE_CLOSE, sid); streams.pop(sid, None)
-            elif t == TYPE_CLOSE:
-                p = streams.pop(sid, None)
-                if p:
-                    try: p[1].close(); await p[1].wait_closed()
-                    except: pass
-    except: pass
-    finally:
-        for _, (_, xw) in list(streams.items()):
-            try: xw.close()
-            except: pass
-        try: wr.close()
-        except: pass
+        s = socket.socket(fam, socket.SOCK_STREAM)
+        s.settimeout(10)
+        s.connect(addr)
+        s.settimeout(None)
+        sock = s
+        print(f"    Conectado a {addr[0]}")
+        break
+    except Exception as e:
+        print(f"    Fallo {addr[0]}: {e}")
 
-async def main():
-    cid = load_id()
-    n = 0
-    while True:
-        if n > 0: print(f"Reintentando {n}...", flush=True)
-        r = await connect(cid)
-        if r[1]: sys.exit(1)
-        if r[0]:
-            n = 0
-            print("Trafico activo", flush=True)
-            await mux(*r[0])
-        n += 1
-        await asyncio.sleep(min(n*6, 30))
+if not sock:
+    print("ERROR: No se pudo conectar.")
+    sys.exit(1)
 
-asyncio.run(main())
-PYEOF
-    chmod +x "$CLIENT_PY"
+# Paso 3 - P1
+print()
+print("[3] Enviando P1...")
+p1 = f"GET / HTTP/1.1\r\nHost: {PROXY_HOST}\r\n\r\n"
+sock.sendall(p1.encode())
+print("    P1 enviado")
+time.sleep(0.01)
 
-    echo ""
-    echo "=============================="
-    echo "  ID de este cliente:"
-    echo "  $CLIENT_ID"
-    echo "=============================="
-    echo ""
-    echo "Registralo en el panel y presiona ENTER..."
-    read -r
-fi
+# Paso 4 - P2
+print()
+print("[4] Enviando P2...")
+t0 = time.time()
+p2 = (f"- / HTTP/1.1\r\nHost: {TUNNEL_HOST}\r\nUpgrade: websocket\r\n"
+      f"Action: tunnel\r\nX-Client-Id: {CLIENT_ID}\r\n\r\n")
+sock.sendall(p2.encode())
+print("    P2 enviado")
 
-source "$CONFIG_FILE"
+# Paso 5 - respuesta
+print()
+print("[5] Esperando respuesta del servidor...")
+sock.settimeout(8)
+raw = b""
+try:
+    while b"\r\n\r\n" not in raw:
+        c = sock.recv(4096)
+        if not c: break
+        raw += c
+except socket.timeout:
+    print("    TIMEOUT - no respondio en 8 segundos")
+    sock.close()
+    sys.exit(1)
 
-# Config xray
-cat > "$INSTALL_DIR/xray-client.json" << EOF
-{
-  "log":{"loglevel":"none"},
-  "dns":{"servers":["fakedns",{"address":"8.8.8.8","queryStrategy":"UseIPv4"},{"address":"1.1.1.1","queryStrategy":"UseIPv4"}],"queryStrategy":"UseIPv4"},
-  "fakedns":[{"ipPool":"198.18.0.0/15","poolSize":65535}],
-  "inbounds":[{"protocol":"socks","listen":"127.0.0.1","port":$SOCKS_PORT,"settings":{"udp":true},"sniffing":{"enabled":true,"destOverride":["http","tls","quic","fakedns"],"metadataOnly":false}}],
-  "outbounds":[{"protocol":"vless","settings":{"vnext":[{"address":"127.0.0.1","port":$TUNNEL_PORT,"users":[{"id":"$VLESS_UUID","encryption":"none"}]}]},"streamSettings":{"network":"tcp","security":"none"},"mux":{"enabled":true,"concurrency":128,"xudpConcurrency":1024,"xudpProxyUDP443":"allow"}}]
-}
-EOF
+ms = int((time.time() - t0) * 1000)
+print(f"    Respuesta en {ms}ms:")
+print()
+print("--- RESPUESTA CRUDA ---")
+print(raw.decode(errors="replace"))
+print("-----------------------")
 
-# Config redsocks
-cat > "$REDSOCKS_CONF" << EOF
-base {
-    log_debug = off; log_info = off;
-    log = "file:/var/log/redsocks.log";
-    daemon = off; redirector = iptables;
-}
-redsocks {
-    local_ip = 127.0.0.1; local_port = 12345;
-    ip = 127.0.0.1; port = $SOCKS_PORT; type = socks5;
-}
-EOF
+if b"101" in raw[:30]:
+    print()
+    print("EXITO: Handshake 101 OK - tunel establecido")
+else:
+    print()
+    print("ERROR: No se recibio 101")
 
-# Matar anteriores
-pkill -f btclient 2>/dev/null || true
-pkill -f "xray run" 2>/dev/null || true
-pkill -f redsocks 2>/dev/null || true
-sleep 1
-
-# Iniciar xray
-"$XRAY_BIN" run -c "$INSTALL_DIR/xray-client.json" > /var/log/xtunnel-xray.log 2>&1 &
-sleep 1
-
-# Iniciar redsocks
-redsocks -c "$REDSOCKS_CONF" &
-sleep 1
-
-# iptables — redirigir todo TCP por redsocks excepto tráfico local
-iptables -t nat -F OUTPUT 2>/dev/null || true
-iptables -t nat -N REDSOCKS 2>/dev/null || iptables -t nat -F REDSOCKS
-iptables -t nat -A REDSOCKS -d 127.0.0.0/8 -j RETURN
-iptables -t nat -A REDSOCKS -d 192.168.0.0/16 -j RETURN
-iptables -t nat -A REDSOCKS -d 10.0.0.0/8 -j RETURN
-PROXY_IP=$(python3 -c "import socket; print(socket.gethostbyname('emailmarketing.personal.com.ar'))" 2>/dev/null || echo "")
-[ -n "$PROXY_IP" ] && iptables -t nat -A REDSOCKS -d "$PROXY_IP" -j RETURN
-iptables -t nat -A REDSOCKS -p tcp -j REDIRECT --to-ports 12345
-iptables -t nat -A OUTPUT -p tcp -j REDSOCKS
-
-echo "ID: $CLIENT_ID"
-echo "Iniciando tunel..."
-python3 "$CLIENT_PY"
+sock.close()
