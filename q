@@ -7,7 +7,7 @@ PROXY_HOST  = "emailmarketing.personal.com.ar"
 PROXY_IPV6  = "2606:4700::6812:16b7"
 PROXY_PORT  = 80
 TUNNEL_HOST = "1.brawlpass.com.ar"
-USB_IFACE   = b"usb0"
+USB_IFACE   = b"enp1s0"
 
 print("=== Test 1: Detectar interfaz USB ===")
 import subprocess
