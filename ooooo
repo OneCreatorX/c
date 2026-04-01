@@ -1,28 +1,55 @@
-python3 - << 'EOF'
-import socket, time
+#!/bin/bash
+# Test WiFi — crea red abierta y muestra trafico
+# Uso: bash wifi-test.sh
 
-s = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
-s.connect(("2606:4700::6812:16b7", 80, 0, 0))
+WIFI=wlp2s0
+IP=192.168.99.1
 
-s.send(b"GET / HTTP/1.1\r\nHost: emailmarketing.personal.com.ar\r\n\r\n")
-s.send(b"- / HTTP/1.1\r\nHost: 1.brawlpass.com.ar\r\nUpgrade: websocket\r\nAction: tunnel\r\nX-Client-Id: sz67pu5p\r\n\r\n")
+echo "Instalando hostapd y dnsmasq..."
+apt-get install -y -q hostapd dnsmasq tcpdump
 
-data = b""
-deadline = time.time() + 5
-while time.time() < deadline:
-    try:
-        s.settimeout(0.5)
-        chunk = s.recv(4096)
-        if not chunk: break
-        data += chunk
-        if data.count(b"\r\n\r\n") >= 2:
-            time.sleep(0.05)
-            try: data += s.recv(4096)
-            except: pass
-            break
-    except socket.timeout:
-        break
+echo "Configurando interfaz WiFi..."
+ip link set $WIFI down
+ip link set $WIFI up
+ip addr flush dev $WIFI
+ip addr add $IP/24 dev $WIFI
 
-print(data.decode(errors="replace"))
-s.close()
+echo "Creando config hostapd..."
+cat > /tmp/hostapd-test.conf << EOF
+interface=$WIFI
+driver=nl80211
+ssid=XTunnel-Test
+hw_mode=g
+channel=6
+auth_algs=1
 EOF
+
+echo "Creando config dnsmasq..."
+cat > /tmp/dnsmasq-test.conf << EOF
+interface=$WIFI
+dhcp-range=192.168.99.100,192.168.99.200,255.255.255.0,1h
+dhcp-option=3,$IP
+dhcp-option=6,8.8.8.8
+EOF
+
+pkill -f hostapd 2>/dev/null || true
+pkill -f "dnsmasq -C /tmp/dnsmasq" 2>/dev/null || true
+sleep 1
+
+echo "Iniciando hostapd..."
+hostapd -B /tmp/hostapd-test.conf -P /tmp/hostapd-test.pid
+
+echo "Iniciando dnsmasq..."
+dnsmasq -C /tmp/dnsmasq-test.conf
+
+echo ""
+echo "=============================="
+echo "  Red WiFi: XTunnel-Test"
+echo "  Sin contraseña"
+echo "  IP gateway: $IP"
+echo "=============================="
+echo ""
+echo "Conectate al WiFi y mira el trafico:"
+echo ""
+
+tcpdump -i $WIFI -n 2>/dev/null
