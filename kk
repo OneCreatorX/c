@@ -1,56 +1,54 @@
-#!/usr/bin/env python3
-# Intermedio transparente — captura trafico WiFi y lo reenvía
-import socket, threading, struct
+#!/bin/bash
+# XTunnel PC — iniciar todo
+# Uso: bash start.sh
 
-LISTEN_IP   = "192.168.99.1"
-LISTEN_PORT = 12345
+WIFI=wlp2s0
+USB=enxa622d9c52ba3
+GW_IP=192.168.99.1
 
-def get_original_dest(sock):
-    # SO_ORIGINAL_DST — obtener destino real antes de iptables
-    SO_ORIGINAL_DST = 80
-    dst = sock.getsockopt(socket.SOL_IP, SO_ORIGINAL_DST, 16)
-    port = struct.unpack("!H", dst[2:4])[0]
-    ip   = socket.inet_ntoa(dst[4:8])
-    return ip, port
+# Crear configs
+cat > /tmp/hostapd-test.conf << EOF
+interface=$WIFI
+driver=nl80211
+ssid=XTunnel-Test
+hw_mode=g
+channel=6
+auth_algs=1
+EOF
 
-def pipe(src, dst, label):
-    try:
-        while True:
-            d = src.recv(4096)
-            if not d: break
-            print(f"  [{label}] {len(d)} bytes", flush=True)
-            dst.sendall(d)
-    except: pass
-    try: src.close()
-    except: pass
-    try: dst.close()
-    except: pass
+cat > /tmp/dnsmasq-test.conf << EOF
+interface=$WIFI
+dhcp-range=192.168.99.100,192.168.99.200,255.255.255.0,1h
+dhcp-option=3,$GW_IP
+dhcp-option=6,8.8.8.8
+EOF
 
-def handle(client, addr):
-    try:
-        dst_ip, dst_port = get_original_dest(client)
-        print(f"[+] {addr[0]} -> {dst_ip}:{dst_port}", flush=True)
-        server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        server.connect((dst_ip, dst_port))
-        threading.Thread(target=pipe, args=(client, server, "->"), daemon=True).start()
-        pipe(server, client, "<-")
-    except Exception as e:
-        print(f"[!] Error: {e}", flush=True)
-        try: client.close()
-        except: pass
+# Configurar interfaz WiFi
+ip link set $WIFI down
+ip link set $WIFI up
+ip addr flush dev $WIFI
+ip addr add $GW_IP/24 dev $WIFI
 
-srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-srv.bind((LISTEN_IP, LISTEN_PORT))
-srv.listen(200)
-print(f"Intermedio activo en {LISTEN_IP}:{LISTEN_PORT}", flush=True)
-print("Redirigí el trafico con:", flush=True)
-print(f"  iptables -t nat -A PREROUTING -i wlp2s0 -p tcp -j REDIRECT --to-ports {LISTEN_PORT}", flush=True)
-print("", flush=True)
+# NAT
+sysctl -w net.ipv4.ip_forward=1
+iptables -t nat -F
+iptables -F FORWARD
+iptables -t nat -A POSTROUTING -o $USB -j MASQUERADE
+iptables -A FORWARD -i $WIFI -o $USB -j ACCEPT
+iptables -A FORWARD -i $USB -o $WIFI -m state --state RELATED,ESTABLISHED -j ACCEPT
 
-while True:
-    try:
-        c, a = srv.accept()
-        threading.Thread(target=handle, args=(c, a), daemon=True).start()
-    except KeyboardInterrupt:
-        break
+# Iniciar hostapd en ventana screen 0
+screen -S xtunnel -dm bash -c "hostapd /tmp/hostapd-test.conf"
+
+# Iniciar dnsmasq en ventana screen 1
+screen -S xtunnel -X screen bash -c "dnsmasq -C /tmp/dnsmasq-test.conf --no-daemon"
+
+echo ""
+echo "=============================="
+echo "  WiFi: XTunnel-Test"
+echo "  Sin contrasena"
+echo "  Gateway: $GW_IP"
+echo "=============================="
+echo ""
+echo "Para ver las ventanas: screen -r xtunnel"
+echo "Ctrl+A luego N para cambiar ventana"
