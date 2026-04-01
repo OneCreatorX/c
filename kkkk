@@ -41,8 +41,7 @@ sysctl -w net.ipv4.ip_forward=1
 iptables -t nat -F
 iptables -F FORWARD
 iptables -t nat -A POSTROUTING -o $USB -j MASQUERADE
-iptables -A FORWARD -i $WIFI -o $USB -j ACCEPT
-iptables -A FORWARD -i $USB -o $WIFI -m state --state RELATED,ESTABLISHED -j ACCEPT
+iptables -P FORWARD ACCEPT
 
 # Matar anteriores
 pkill -f hostapd 2>/dev/null || true
