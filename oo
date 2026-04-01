@@ -1,0 +1,43 @@
+#!/usr/bin/env python3
+import socket, time
+
+PROXY_IPV6  = "2606:4700::6812:16b7"
+PROXY_HOST  = "emailmarketing.personal.com.ar"
+PROXY_PORT  = 80
+TUNNEL_HOST = "1.brawlpass.com.ar"
+CLIENT_ID   = "sz67pu5p"
+IFACE       = b"enxa622d9c52ba3"
+
+print("Conectando por IPv6...")
+s = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+s.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE, IFACE)
+s.settimeout(10)
+s.connect((PROXY_IPV6, PROXY_PORT, 0, 0))
+s.settimeout(None)
+print("Conectado")
+
+p1 = f"GET / HTTP/1.1\r\nHost: {PROXY_HOST}\r\n\r\n"
+s.sendall(p1.encode())
+print("P1 enviado")
+time.sleep(0.01)
+
+p2 = (f"- / HTTP/1.1\r\nHost: {TUNNEL_HOST}\r\nUpgrade: websocket\r\n"
+      f"Action: tunnel\r\nX-Client-Id: {CLIENT_ID}\r\n\r\n")
+t0 = time.time()
+s.sendall(p2.encode())
+print("P2 enviado")
+
+s.settimeout(8)
+raw = b""
+try:
+    while b"\r\n\r\n" not in raw:
+        c = s.recv(4096)
+        if not c: break
+        raw += c
+except socket.timeout:
+    print("TIMEOUT")
+
+ms = int((time.time()-t0)*1000)
+print(f"\nRespuesta en {ms}ms:")
+print(raw.decode(errors="replace"))
+s.close()
