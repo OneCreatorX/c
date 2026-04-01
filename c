@@ -1,3 +1,8 @@
+pkill -f redsocks
+pkill -f xray
+iptables -t nat -F OUTPUT
+iptables -t nat -F REDSOCKS
+iptables -t nat -X REDSOCKS
 #!/usr/bin/env python3
 # Test de conexion minimo — muestra cada paso
 import socket, time, sys
