@@ -3,11 +3,16 @@
 # Uso: bash start.sh
 
 WIFI=wlp2s0
-USB=enxa622d9c52ba3
 GW_IP=192.168.99.1
 
+# Detectar interfaz USB automaticamente
+USB=$(ip route | awk '/default/{print $5}' | head -1)
+echo "USB detectado: $USB"
+echo "WiFi: $WIFI"
+echo ""
+
 # Crear configs
-cat > /tmp/hostapd-test.conf << EOF
+cat > /tmp/hostapd.conf << EOF
 interface=$WIFI
 driver=nl80211
 ssid=XTunnel-Test
@@ -16,39 +21,44 @@ channel=6
 auth_algs=1
 EOF
 
-cat > /tmp/dnsmasq-test.conf << EOF
+cat > /tmp/dnsmasq.conf << EOF
 interface=$WIFI
 dhcp-range=192.168.99.100,192.168.99.200,255.255.255.0,1h
 dhcp-option=3,$GW_IP
 dhcp-option=6,8.8.8.8
 EOF
 
-# Configurar interfaz WiFi
+# Configurar WiFi
 ip link set $WIFI down
 ip link set $WIFI up
 ip addr flush dev $WIFI
 ip addr add $GW_IP/24 dev $WIFI
 
-# NAT
+# IP forwarding
 sysctl -w net.ipv4.ip_forward=1
+
+# NAT con interfaz detectada
 iptables -t nat -F
 iptables -F FORWARD
 iptables -t nat -A POSTROUTING -o $USB -j MASQUERADE
 iptables -A FORWARD -i $WIFI -o $USB -j ACCEPT
 iptables -A FORWARD -i $USB -o $WIFI -m state --state RELATED,ESTABLISHED -j ACCEPT
 
-# Iniciar hostapd en ventana screen 0
-screen -S xtunnel -dm bash -c "hostapd /tmp/hostapd-test.conf"
+# Matar anteriores
+pkill -f hostapd 2>/dev/null || true
+pkill -f dnsmasq 2>/dev/null || true
+sleep 1
 
-# Iniciar dnsmasq en ventana screen 1
-screen -S xtunnel -X screen bash -c "dnsmasq -C /tmp/dnsmasq-test.conf --no-daemon"
+# Iniciar en screen
+screen -dmS xtunnel bash -c "hostapd /tmp/hostapd.conf"
+sleep 1
+screen -S xtunnel -X screen bash -c "dnsmasq -C /tmp/dnsmasq.conf --no-daemon; bash"
 
-echo ""
 echo "=============================="
 echo "  WiFi: XTunnel-Test"
 echo "  Sin contrasena"
 echo "  Gateway: $GW_IP"
+echo "  USB: $USB"
 echo "=============================="
 echo ""
-echo "Para ver las ventanas: screen -r xtunnel"
-echo "Ctrl+A luego N para cambiar ventana"
+echo "screen -r xtunnel para ver logs"
