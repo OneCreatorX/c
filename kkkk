@@ -5,6 +5,15 @@
 WIFI=wlp2s0
 GW_IP=192.168.99.1
 
+# Detener todo lo anterior
+pkill -f hostapd 2>/dev/null || true
+pkill -f dnsmasq 2>/dev/null || true
+screen -S xtunnel -X quit 2>/dev/null || true
+iptables -t nat -F
+iptables -F FORWARD
+iptables -P FORWARD ACCEPT
+sleep 1
+
 # Detectar interfaz USB automaticamente
 USB=$(ip route | awk '/default/{print $5}' | head -1)
 echo "USB detectado: $USB"
