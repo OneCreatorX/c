@@ -46,9 +46,17 @@ ip addr add $GW_IP/24 dev $WIFI
 # IP forwarding
 sysctl -w net.ipv4.ip_forward=1
 
-# NAT con interfaz detectada
+# Limpiar todo
 iptables -t nat -F
 iptables -F FORWARD
+iptables -F INPUT
+
+# Permitir DHCP y DNS (necesario para dnsmasq)
+iptables -I INPUT -p udp --dport 67 -i $WIFI -j ACCEPT
+iptables -I INPUT -p udp --dport 53 -s 192.168.99.0/24 -j ACCEPT
+iptables -I INPUT -p tcp --dport 53 -s 192.168.99.0/24 -j ACCEPT
+
+# NAT — todo el trafico WiFi sale por USB
 iptables -t nat -A POSTROUTING -o $USB -j MASQUERADE
 iptables -P FORWARD ACCEPT
 
